@@ -1,10 +1,15 @@
 {
   "compilerOptions": {
-    "target": "ES2018",
+    "sourceMap": false,
+    "target": "esnext",
     "moduleResolution": "node",
-    "strict": true,
+    "esModuleInterop": true,
     "declaration": true,
-    "noUnusedLocals": false,
-    "esModuleInterop": true
+    "allowJs": false,
+    "allowSyntheticDefaultImports": true,
+    "noUnusedLocals": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "removeComments": false
   }
 }
