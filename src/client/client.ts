@@ -9,6 +9,7 @@ socket.addEventListener('message', ({ data }) => {
     // JS 更新
     case 'js-update':
       const update = jsUpdateMap.get(path)
+      console.log({ update, path })
       if (update) {
         update(timestamp)
         console.log(`[vit]:js module reloaded`, path)
@@ -37,6 +38,7 @@ export const hot = {
     deps: string | string[],
     callback: (module: object | object[]) => void
   ) {
+    console.log({ importer, deps, callback })
     jsUpdateMap.set(importer, (timestamp: number) => {
       if (Array.isArray(deps)) {
         Promise.all(deps.map(dep => import(dep + `?t=${timestamp}`))).then(

@@ -1,4 +1,8 @@
 import { sayHello } from './other.js'
+import { hot } from '/@hmr'
 
-console.log('this is main.js')
 sayHello()
+
+hot.accept('./other.js', ({ sayHello }) => {
+  sayHello()
+})

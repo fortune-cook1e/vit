@@ -4,6 +4,8 @@ import { Plugin } from '../types'
 import { parse as parseImports } from 'es-module-lexer'
 import MagicString from 'magic-string'
 import { HMR_CLIENT_PUBLIC_PATH } from './hmr'
+import { parse } from '@babel/parser'
+import { StringLiteral } from '@babel/types'
 
 // while we lex the files for imports we also build a import graph
 // so that we can determine what files to hot reload
@@ -29,7 +31,6 @@ export const modulesPlugin: Plugin = ({ root, app }) => {
           return `${openTag}${rewriteImports(script, '/index.html')}</script>`
         }
       )
-      return ctx.body
     }
 
     // 处理 js 文件
@@ -62,6 +63,7 @@ function rewriteImports(source: string, importer: string, timestamp?: string) {
       importeeMap.set(importer, currentImportees)
 
       imports.forEach(({ s: start, e: end, d: dynamicIndex }) => {
+        // 截取引入的模块 例如 import {xx} from '/@hmr'，那么下面的值就是 /@hmr
         const id = source.slice(start, end)
         // 处理非动态import引入
         if (dynamicIndex === -1) {
@@ -69,7 +71,13 @@ function rewriteImports(source: string, importer: string, timestamp?: string) {
             magicString.overwrite(start, end, `/@modules/${id}`)
             hasReplaced = true
           } else if (id === HMR_CLIENT_PUBLIC_PATH) {
-            // TODO: 待处理HMR情况
+            // TIP: 初始化js热更新
+            if (importer.endsWith('.js')) {
+              console.log('js reload init~', { id, importer })
+              // TIP: 这里已经把使用 hot.accept的代码已经修改
+              parseAcceptedDeps(source, importer, magicString)
+              hasReplaced = true
+            }
           } else {
             if (timestamp) {
               magicString.overwrite(
@@ -81,8 +89,6 @@ function rewriteImports(source: string, importer: string, timestamp?: string) {
             }
             // TODO: 干到这里了～
             const importee = path.join(path.dirname(importer), id)
-            console.log({ importee, importer })
-            currentImportees.add(importee)
             ensureMapEntry(importerMap, importee).add(importer)
           }
         }
@@ -129,4 +135,60 @@ const ensureMapEntry = (map: HMRStateMap, key: string): Set<string> => {
     map.set(key, entry)
   }
   return entry
+}
+
+// 检测代码中是否有 hot.accept，并且完成热更新依赖注入
+function parseAcceptedDeps(source: string, importer: string, s: MagicString) {
+  const ast = parse(source, {
+    sourceType: 'module',
+    plugins: [
+      // by default we enable proposals slated for ES2020.
+      // full list at https://babeljs.io/docs/en/next/babel-parser#plugins
+      // this should be kept in async with @vue/compiler-core's support range
+      'bigInt',
+      'optionalChaining',
+      'nullishCoalescingOperator'
+    ]
+  }).program.body
+
+  const registerDep = (e: StringLiteral) => {
+    const deps = ensureMapEntry(hmrBoundariesMap, importer)
+    const depPublicPath = path.join(path.dirname(importer), e.value)
+    deps.add(depPublicPath)
+    s.overwrite(e.start!, e.end!, JSON.stringify(depPublicPath))
+  }
+
+  ast.forEach((node: any) => {
+    if (
+      node.type === 'ExpressionStatement' &&
+      node.expression.type === 'CallExpression' &&
+      node.expression.callee.type === 'MemberExpression' &&
+      node.expression.callee.object.type === 'Identifier' &&
+      node.expression.callee.object.name === 'hot' &&
+      node.expression.callee.property.name === 'accept'
+    ) {
+      const args = node.expression.arguments
+      // inject the imports's own path so it becomes
+      // hot.accept('/foo.js', ['./bar.js'], () => {})
+      s.appendLeft(args[0].start!, JSON.stringify(importer) + ', ')
+      // register the accepted deps
+      if (args[0].type === 'ArrayExpression') {
+        args[0].elements.forEach((e: any) => {
+          if (e && e.type !== 'StringLiteral') {
+            console.error(
+              `[vite] HMR syntax error in ${importer}: hot.accept() deps list can only contain string literals.`
+            )
+          } else if (e) {
+            registerDep(e)
+          }
+        })
+      } else if (args[0].type === 'StringLiteral') {
+        registerDep(args[0])
+      } else {
+        console.error(
+          `[vite] HMR syntax error in ${importer}: hot.accept() expects a dep string or an array of deps.`
+        )
+      }
+    }
+  })
 }
